@@ -163,6 +163,9 @@ public class Colis {
 
 	@Column(name = "reference_paiement")
 	private String referencePaiement;
+
+	@Column(name = "date_paiement") // Nouveau champ ajouté
+	private LocalDateTime datePaiement;
 	// --- FIN NOUVEAUX CHAMPS POUR LE PAIEMENT ---
 
 	@Column(name = "code_validation")
@@ -292,7 +295,7 @@ public class Colis {
 
 	@Generated
 	public String getEmailDestinataire() {
-		return this.emailDestinataire;
+		return this.getEmailDestinataire();
 	}
 
 	@Generated
@@ -317,6 +320,11 @@ public class Colis {
 	}
 
 	@Generated
+	public LocalDateTime getDatePaiement() { // Getter pour le nouveau champ
+		return this.datePaiement;
+	}
+
+	@Generated
 	public void setModePaiement(String modePaiement) {
 		this.modePaiement = modePaiement;
 	}
@@ -324,6 +332,11 @@ public class Colis {
 	@Generated
 	public void setReferencePaiement(String referencePaiement) {
 		this.referencePaiement = referencePaiement;
+	}
+
+	@Generated
+	public void setDatePaiement(LocalDateTime datePaiement) { // Setter pour le nouveau champ
+		this.datePaiement = datePaiement;
 	}
 	// --- FIN GETTERS & SETTERS POUR LE PAIEMENT ---
 
@@ -615,7 +628,6 @@ public class Colis {
 										if (other$dateLivraisonPrevue != null) {
 											return false;
 										}
-										// --- NOUVELLE LOGIQUE POUR LE PAIEMENT ---
 									} else if (!this$dateLivraisonPrevue.equals(other$dateLivraisonPrevue)) {
 										return false;
 									}
@@ -663,7 +675,7 @@ public class Colis {
 											}
 
 											Object this$emailExpediteur = this.getEmailExpediteur();
-											Object other$emailExpediteur = other.getEmailExpediteur();
+											Object other$emailExpediteur = other.getEmailDestinataire();
 											if (this$emailExpediteur == null) {
 												if (other$emailExpediteur != null) {
 													return false;
@@ -764,6 +776,16 @@ public class Colis {
 																	return false;
 																}
 															} else if (!this$referencePaiement.equals(other$referencePaiement)) {
+																return false;
+															}
+															// Nouveau champ datePaiement dans equals
+															Object this$datePaiement = this.getDatePaiement();
+															Object other$datePaiement = other.getDatePaiement();
+															if (this$datePaiement == null) {
+																if (other$datePaiement != null) {
+																	return false;
+																}
+															} else if (!this$datePaiement.equals(other$datePaiement)) {
 																return false;
 															}
 															// --- FIN NOUVELLE LOGIQUE POUR LE PAIEMENT ---
@@ -869,6 +891,9 @@ public class Colis {
 		result = result * 59 + ($modePaiement == null ? 43 : $modePaiement.hashCode());
 		Object $referencePaiement = this.getReferencePaiement();
 		result = result * 59 + ($referencePaiement == null ? 43 : $referencePaiement.hashCode());
+		// Nouveau champ datePaiement dans hashCode
+		Object $datePaiement = this.getDatePaiement();
+		result = result * 59 + ($datePaiement == null ? 43 : $datePaiement.hashCode());
 		// --- FIN NOUVELLE LOGIQUE POUR LE PAIEMENT ---
 		Object $codeValidation = this.getCodeValidation();
 		result = result * 59 + ($codeValidation == null ? 43 : $codeValidation.hashCode());
@@ -879,18 +904,18 @@ public class Colis {
 
 	@Generated
 	public String toString() {
-		return "Colis(id=" + this.getId() + ", agence=" + this.getAgence() + ", clientExpediteur=" + this.getClientExpediteur() + ", description=" + this.getDescription() + ", weight=" + this.getWeight() + ", dimensions=" + this.getDimensions() + ", estimatedCost=" + this.getEstimatedCost() + ", trackingNumber=" + this.getTrackingNumber() + ", dateEnregistrement=" + this.getDateEnregistrement() + ", dateExpedition=" + this.getDateExpedition() + ", dateArriveeAgenceDestination=" + this.getDateArriveeAgenceDestination() + ", dateLivraisonEstimee=" + this.getDateLivraisonEstimee() + ", dateLivraisonPrevue=" + this.getDateLivraisonPrevue() + ", dateLivraisonReelle=" + this.getDateLivraisonReelle() + ", statut=" + this.getStatut() + ", nomExpediteur=" + this.getNomExpediteur() + ", telephoneExpediteur=" + this.getTelephoneExpediteur() + ", emailExpediteur=" + this.getEmailExpediteur() + ", villeOrigine=" + this.getVilleOrigine() + ", quartierExpedition=" + this.getQuartierExpedition() + ", nomDestinataire=" + this.getNomDestinataire() + ", numeroDestinataire=" + this.getNumeroDestinataire() + ", emailDestinataire=" + this.getEmailDestinataire() + ", villeDeDestination=" + this.getVilleDeDestination() + ", quartierDestination=" + this.getQuartierDestination() + ", modePaiement=" + this.getModePaiement() + ", referencePaiement=" + this.getReferencePaiement() + ", codeValidation=" + this.getCodeValidation() + ", assignedVoyage=" + this.getAssignedVoyage() + ")";
+		return "Colis(id=" + this.getId() + ", agence=" + this.getAgence() + ", clientExpediteur=" + this.getClientExpediteur() + ", description=" + this.getDescription() + ", weight=" + this.getWeight() + ", dimensions=" + this.getDimensions() + ", estimatedCost=" + this.getEstimatedCost() + ", trackingNumber=" + this.getTrackingNumber() + ", dateEnregistrement=" + this.getDateEnregistrement() + ", dateExpedition=" + this.getDateExpedition() + ", dateArriveeAgenceDestination=" + this.getDateArriveeAgenceDestination() + ", dateLivraisonEstimee=" + this.getDateLivraisonEstimee() + ", dateLivraisonPrevue=" + this.getDateLivraisonPrevue() + ", dateLivraisonReelle=" + this.getDateLivraisonReelle() + ", statut=" + this.getStatut() + ", nomExpediteur=" + this.getNomExpediteur() + ", telephoneExpediteur=" + this.getTelephoneExpediteur() + ", emailExpediteur=" + this.getEmailExpediteur() + ", villeOrigine=" + this.getVilleOrigine() + ", quartierExpedition=" + this.getQuartierExpedition() + ", nomDestinataire=" + this.getNomDestinataire() + ", numeroDestinataire=" + this.getNumeroDestinataire() + ", emailDestinataire=" + this.getEmailDestinataire() + ", villeDeDestination=" + this.getVilleDeDestination() + ", quartierDestination=" + this.getQuartierDestination() + ", modePaiement=" + this.getModePaiement() + ", referencePaiement=" + this.getReferencePaiement() + ", datePaiement=" + this.getDatePaiement() + ", codeValidation=" + this.getCodeValidation() + ", assignedVoyage=" + this.getAssignedVoyage() + ")";
 	}
 
 	public static enum ColisStatus {
 		ENREGISTRE("Enregistré"),
 		PRET_A_ENVOYER("Prêt à envoyer"),
-		EN_TRANSIT("En transit"),
+		EXPEDIE("En transit"),
 		ARRIVE_AGENCE_DESTINATION("Arrivé à l'agence de destination"),
 		PRET_A_ETRE_RETIRE("Prêt à être retiré"),
 		LIVRE("Livré"),
 		ANNULE("Annulé"),
-		// --- NOUVEAUX STATUTS POUR LE PAIEMENT ---
+		// --- NOUVEAUX STATUTS POUR LE PAIEMENT --
 		EN_ATTENTE_PAIEMENT("En attente de paiement"),
 		PAYE("Payé");
 		// --- FIN NOUVEAUX STATUTS POUR LE PAIEMENT ---
