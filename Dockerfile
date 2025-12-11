@@ -1,31 +1,32 @@
-# Utiliser une image de base avec Java 17
-FROM openjdk:17-jdk-slim
+# ====== BUILD STAGE ======
+FROM maven:3.9.4-eclipse-temurin-17 AS build
 
-# Définir le répertoire de travail
 WORKDIR /app
 
-# Copier le fichier pom.xml et le wrapper Maven
+# Copier les fichiers Maven
 COPY pom.xml .
-COPY .mvn .mvn
 COPY mvnw .
+COPY .mvn .mvn
 
-# Rendre le wrapper Maven exécutable
-RUN chmod +x ./mvnw
-
-# Télécharger les dépendances (optimisation du cache Docker)
+RUN chmod +x mvnw
 RUN ./mvnw dependency:go-offline -B
 
 # Copier le code source
 COPY src ./src
 
-# Supprimer temporairement le keystore pour le build
-RUN rm -f src/main/resources/keystore.p12
-
-# Construire l'application
+# Construire le JAR
 RUN ./mvnw clean package -DskipTests
 
-# Exposer le port 8080
-EXPOSE 8080
 
-# Commande pour démarrer l'application
-CMD ["sh", "-c", "java -jar target/*.jar"]
+# ====== RUNTIME STAGE ======
+FROM eclipse-temurin:17-jre
+
+WORKDIR /app
+
+# Copier le JAR depuis l'étape de build
+COPY --from=build /app/target/*.jar app.jar
+
+# Ton port interne → 8081
+EXPOSE 8081
+
+CMD ["java", "-jar", "app.jar"]
