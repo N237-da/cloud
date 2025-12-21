@@ -5,159 +5,67 @@
 # They are provided by a third-party and are governed by
 # separate terms of service, privacy policy, and support
 # documentation.
-name: Java CI/CD Pipeline
+name: Simple CI/CD
 
 on:
   push:
     branches: ["main"]
 
-env:
-  APP_NAME: cdsir_backend
-  NAMESPACE: app
-  PORT: 8081
-  CLUSTER_NAME: kind  # Nom explicite du cluster
-
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
+    
     steps:
+      # 1. Récupérer le code
       - uses: actions/checkout@v4
-
-      - name: Set up Java
+      
+      # 2. Build l'application Java
+      - name: Build Java app
         uses: actions/setup-java@v4
         with:
           java-version: 17
           distribution: temurin
-          cache: maven
-
-      - name: Build application
         run: |
           chmod +x mvnw
           ./mvnw clean package -DskipTests
-
-  docker:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
+      
+      # 3. Build et push Docker
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:${{ github.sha }}
-
-  deploy:
-    runs-on: ubuntu-latest
-    needs: docker
-    steps:
-      - uses: actions/checkout@v4
-
-      # 1. Créer le cluster KinD AVEC un nom explicite
-      - name: Create KinD cluster
-        uses: helm/kind-action@v1.8.0
-        with:
-          cluster_name: ${{ env.CLUSTER_NAME }}
-          config: |
-            kind: Cluster
-            apiVersion: kind.x-k8s.io/v1alpha4
-            name: ${{ env.CLUSTER_NAME }}
-            nodes:
-            - role: control-plane
-
-      # 2. Configurer kubectl
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v4
-
-      # 3. Vérifier le cluster
-      - name: Verify cluster
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/cdsir_backend:latest
+      
+      # 4. Déployer sur Kubernetes
+      - name: Deploy to Kubernetes
         run: |
-          kubectl config use-context kind-${{ env.CLUSTER_NAME }}
-          kubectl cluster-info
-          kubectl get nodes
-
-      # 4. Charger l'image dans KinD - CORRECTION ICI
-      - name: Load Docker image to KinD
-        run: |
-          # Télécharger l'image
-          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
+          # Installer kind
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+          chmod +x ./kind && sudo mv ./kind /usr/local/bin/
           
-          # Charger dans KinD avec le bon nom de cluster
-          kind load docker-image \
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest \
-            --name ${{ env.CLUSTER_NAME }}
+          # Installer kubectl
+          curl -LO "https://dl.k8s.io/release/v1.27.0/bin/linux/amd64/kubectl"
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
           
-          # Vérifier que l'image est chargée
-          echo "Images dans le cluster:"
-          docker exec ${{ env.CLUSTER_NAME }}-control-plane crictl images | grep ${{ env.APP_NAME }}
-
-      # 5. Déployer l'application
-      - name: Deploy application
-        run: |
-          # Appliquer le namespace
+          # Créer le cluster Kubernetes
+          kind create cluster
+          
+          # Charger l'image Docker dans le cluster
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/cdsir_backend:latest
+          kind load docker-image ${{ secrets.DOCKERHUB_USERNAME }}/cdsir_backend:latest
+          
+          # Déployer l'application
           kubectl apply -f k8s/namespace.yaml
           
-          # Créer un deployment avec la bonne image
-          cat <<EOF | kubectl apply -f -
-          apiVersion: apps/v1
-          kind: Deployment
-          metadata:
-            name: cloud-pro
-            namespace: ${{ env.NAMESPACE }}
-          spec:
-            replicas: 1
-            selector:
-              matchLabels:
-                app: backend
-            template:
-              metadata:
-                labels:
-                  app: backend
-              spec:
-                containers:
-                - name: backend
-                  image: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
-                  imagePullPolicy: IfNotPresent
-                  ports:
-                  - containerPort: ${{ env.PORT }}
-          EOF
+          # Mettre à jour et appliquer le deployment
+          sed -e "s|image: cdsir_backend:latest|image: ${{ secrets.DOCKERHUB_USERNAME }}/cdsir_backend:latest|g" \
+              -e "s|imagePullPolicy: Never|imagePullPolicy: IfNotPresent|g" \
+              k8s/deployment.yaml | kubectl apply -f -
           
-          # Appliquer le service
           kubectl apply -f k8s/service.yaml
           
-          # Vérifier
-          echo "=== État du déploiement ==="
-          kubectl get all -n ${{ env.NAMESPACE }}
-
-      # 6. Attendre que le pod soit prêt
-      - name: Wait for pods
-        run: |
-          echo "Attente du démarrage du pod..."
-          for i in {1..30}; do
-            if kubectl get pods -n ${{ env.NAMESPACE }} -l app=backend -o jsonpath='{.items[*].status.phase}' | grep -q Running; then
-              echo "✓ Pod en cours d'exécution"
-              break
-            fi
-            echo "En attente... ($i/30)"
-            sleep 5
-          done
-          
-          kubectl get pods -n ${{ env.NAMESPACE }}
-
-      # 7. Vérifier les logs
-      - name: Check logs
-        run: |
-          echo "=== Logs de démarrage ==="
-          kubectl logs -n ${{ env.NAMESPACE }} -l app=backend --tail=20
+          # Vérifier le déploiement
+          echo "✅ Déploiement réussi !"
+          sleep 5
+          kubectl get all -n app
