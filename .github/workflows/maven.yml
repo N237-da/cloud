@@ -5,67 +5,135 @@
 # They are provided by a third-party and are governed by
 # separate terms of service, privacy policy, and support
 # documentation.
-name: Simple CI/CD
+name: Simple CI/CD Pipeline
 
 on:
   push:
     branches: ["main"]
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
-    
     steps:
-      # 1. Récupérer le code
       - uses: actions/checkout@v4
-      
-      # 2. Build l'application Java
-      - name: Build Java app
+
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           java-version: 17
           distribution: temurin
+
+      - name: Build
         run: |
           chmod +x mvnw
           ./mvnw clean package -DskipTests
-      
-      # 3. Build et push Docker
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/cdsir_backend:latest
-      
-      # 4. Déployer sur Kubernetes
-      - name: Deploy to Kubernetes
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/cdsir_backend:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/cdsir_backend:${{ github.sha }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: docker
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kind and kubectl
         run: |
           # Installer kind
           curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
-          chmod +x ./kind && sudo mv ./kind /usr/local/bin/
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/
           
           # Installer kubectl
-          curl -LO "https://dl.k8s.io/release/v1.27.0/bin/linux/amd64/kubectl"
-          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
           
-          # Créer le cluster Kubernetes
+          # Vérifier les installations
+          kind version
+          kubectl version --client
+
+      - name: Create Kubernetes cluster
+        run: |
+          # Supprimer un cluster existant (au cas où)
+          kind delete cluster 2>/dev/null || true
+          
+          # Créer un nouveau cluster
           kind create cluster
           
-          # Charger l'image Docker dans le cluster
+          # Vérifier
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: Load Docker image into cluster
+        run: |
+          # Télécharger l'image
           docker pull ${{ secrets.DOCKERHUB_USERNAME }}/cdsir_backend:latest
+          
+          # Charger dans le cluster kind
           kind load docker-image ${{ secrets.DOCKERHUB_USERNAME }}/cdsir_backend:latest
           
-          # Déployer l'application
+          echo "✅ Image chargée dans le cluster"
+
+      - name: Deploy to Kubernetes
+        run: |
+          # 1. Créer le namespace
           kubectl apply -f k8s/namespace.yaml
           
-          # Mettre à jour et appliquer le deployment
-          sed -e "s|image: cdsir_backend:latest|image: ${{ secrets.DOCKERHUB_USERNAME }}/cdsir_backend:latest|g" \
-              -e "s|imagePullPolicy: Never|imagePullPolicy: IfNotPresent|g" \
-              k8s/deployment.yaml | kubectl apply -f -
+          # 2. Mettre à jour le deployment avec la bonne image
+          sed -i.bak "s|image: cdsir_backend:latest|image: ${{ secrets.DOCKERHUB_USERNAME }}/cdsir_backend:latest|g" k8s/deployment.yaml
+          sed -i "s|imagePullPolicy: Never|imagePullPolicy: IfNotPresent|g" k8s/deployment.yaml
           
+          # 3. Appliquer les configurations
+          kubectl apply -f k8s/deployment.yaml
           kubectl apply -f k8s/service.yaml
           
-          # Vérifier le déploiement
-          echo "✅ Déploiement réussi !"
-          sleep 5
+          # 4. Vérifier
+          echo "=== État du déploiement ==="
           kubectl get all -n app
+          
+          # 5. Attendre que le pod démarre
+          echo "Attente du démarrage du pod..."
+          sleep 10
+          kubectl get pods -n app
+          
+          # 6. Voir les logs
+          echo "=== Logs de démarrage ==="
+          kubectl logs -n app -l app=backend --tail=20 || echo "Pas encore de logs"
+
+      - name: Test the application
+        run: |
+          # Tester avec un port-forward temporaire
+          echo "Test de l'application..."
+          timeout 30s kubectl port-forward -n app svc/backend 8081:8081 &
+          sleep 8
+          
+          # Tester l'endpoint health
+          if curl -f -s -o /dev/null -w "HTTP Status: %{http_code}\n" http://localhost:8081/actuator/health; then
+            echo "✅ Application fonctionnelle !"
+          else
+            echo "⚠ Application déployée mais endpoint non accessible"
+            echo "Vérification des pods..."
+            kubectl describe pods -n app -l app=backend
+          fi
