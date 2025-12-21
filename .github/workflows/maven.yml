@@ -5,60 +5,31 @@
 # They are provided by a third-party and are governed by
 # separate terms of service, privacy policy, and support
 # documentation.
-name: Java CI/CD Pipeline
+name: Simple CI/CD Pipeline
 
 on:
   push:
     branches: ["main"]
-  pull_request:
-    branches: ["main"]
-
-env:
-  APP_NAME: cdsir_backend
-  NAMESPACE: app
-  PORT: 8081
 
 jobs:
-  build-and-test:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      # Build
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           java-version: 17
           distribution: temurin
-          cache: maven
 
-      - name: Build with Maven
+      - name: Build
         run: |
           chmod +x mvnw
           ./mvnw clean package -DskipTests
 
-      - name: Run Tests
-        run: ./mvnw test
-
-      - name: Upload JAR artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-jar
-          path: target/*.jar
-          retention-days: 1
-
-  build-and-push-docker:
-    runs-on: ubuntu-latest
-    needs: build-and-test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download JAR artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: app-jar
-
+      # Docker
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -68,197 +39,34 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}
-          tags: |
-            type=sha,prefix=,format=short
-            type=ref,event=branch
-            type=raw,value=latest
-
-      - name: Build and push Docker image
+      - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/cdsir_backend:latest
 
-  deploy-to-kind:
-    runs-on: ubuntu-latest
-    needs: build-and-push-docker
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    steps:
-      - uses: actions/checkout@v4
-
-      # Étape 1: Créer un cluster KinD avec port mapping
+      # Deploy to KinD
       - name: Create KinD cluster
         uses: helm/kind-action@v1.8.0
-        with:
-          node_image: kindest/node:v1.27.3
-          config: |
-            kind: Cluster
-            apiVersion: kind.x-k8s.io/v1alpha4
-            nodes:
-            - role: control-plane
-              kubeadmConfigPatches:
-              - |
-                kind: InitConfiguration
-                nodeRegistration:
-                  kubeletExtraArgs:
-                    node-labels: "ingress-ready=true"
-              extraPortMappings:
-              # Pour NodePort service (8081 -> 30081)
-              - containerPort: 30081
-                hostPort: 30081
-                protocol: TCP
-              # Pour ingress si besoin plus tard
-              - containerPort: 80
-                hostPort: 80
-                protocol: TCP
-              - containerPort: 443
-                hostPort: 443
-                protocol: TCP
 
-      # Étape 2: Configurer kubectl
       - name: Set up kubectl
         uses: azure/setup-kubectl@v4
-        with:
-          version: 'latest'
 
-      # Étape 3: Vérifier le cluster
-      - name: Verify cluster
+      - name: Load image to KinD
         run: |
-          kubectl cluster-info --context kind-kind
-          kubectl get nodes
-          echo "Cluster créé avec succès"
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/cdsir_backend:latest
+          kind load docker-image ${{ secrets.DOCKERHUB_USERNAME }}/cdsir_backend:latest
 
-      # Étape 4: Charger l'image Docker dans KinD
-      - name: Load Docker image to KinD
+      - name: Deploy to Kubernetes
         run: |
-          # Télécharger l'image depuis Docker Hub
-          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:${{ github.sha }}
-          
-          # Charger dans KinD
-          kind load docker-image \
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:${{ github.sha }} \
-            --name kind
-          
-          # Tag aussi avec latest pour le déploiement
-          docker tag ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:${{ github.sha }} \
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest
-          kind load docker-image \
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:latest \
-            --name kind
-
-      # Étape 5: Déployer l'application
-      - name: Deploy application
-        env:
-          DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:${{ github.sha }}
-        run: |
-          echo "Déploiement avec l'image: $DOCKER_IMAGE"
-          
-          # Créer le namespace
           kubectl apply -f k8s/namespace.yaml
           
-          # Mettre à jour le deployment avec la bonne image
-          cat <<EOF > deployment-updated.yaml
-          apiVersion: apps/v1
-          kind: Deployment
-          metadata:
-            name: cloud-pro
-            namespace: ${{ env.NAMESPACE }}
-          spec:
-            replicas: 1
-            selector:
-              matchLabels:
-                app: backend
-            template:
-              metadata:
-                labels:
-                  app: backend
-              spec:
-                containers:
-                  - name: backend
-                    image: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.APP_NAME }}:${{ github.sha }}
-                    imagePullPolicy: IfNotPresent
-                    ports:
-                      - containerPort: ${{ env.PORT }}
-                    resources:
-                      requests:
-                        memory: "256Mi"
-                        cpu: "100m"
-                      limits:
-                        memory: "512Mi"
-                        cpu: "500m"
-                    readinessProbe:
-                      httpGet:
-                        path: /actuator/health
-                        port: ${{ env.PORT }}
-                      initialDelaySeconds: 30
-                      periodSeconds: 10
-                    livenessProbe:
-                      httpGet:
-                        path: /actuator/health
-                        port: ${{ env.PORT }}
-                      initialDelaySeconds: 60
-                      periodSeconds: 20
-          EOF
+          # Mettre à jour l'image dans le deployment
+          sed 's|image: cdsir_backend:latest|image: ${{ secrets.DOCKERHUB_USERNAME }}/cdsir_backend:latest|g' k8s/deployment.yaml | \
+          sed 's|imagePullPolicy: Never|imagePullPolicy: IfNotPresent|g' | kubectl apply -f -
           
-          # Appliquer les configurations
-          kubectl apply -f deployment-updated.yaml
           kubectl apply -f k8s/service.yaml
           
-          echo "=== Ressources déployées ==="
-          kubectl get all -n ${{ env.NAMESPACE }}
-
-      # Étape 6: Attendre que l'application soit prête
-      - name: Wait for application
-        run: |
-          echo "Attente du déploiement..."
-          kubectl rollout status deployment/cloud-pro -n ${{ env.NAMESPACE }} --timeout=180s
-          
-          echo "=== État des pods ==="
-          kubectl get pods -n ${{ env.NAMESPACE }} -o wide
-          
-          echo "=== Logs de démarrage ==="
-          kubectl logs -n ${{ env.NAMESPACE }} -l app=backend --tail=20
-
-      # Étape 7: Tester l'application
-      - name: Test application
-        run: |
-          echo "=== Test de l'application ==="
-          
-          # Méthode 1: Via port-forward
-          kubectl port-forward -n ${{ env.NAMESPACE }} svc/backend ${{ env.PORT }}:${{ env.PORT }} &
-          PF_PID=$!
-          sleep 10
-          
-          echo "Test du endpoint health..."
-          if curl -f http://localhost:${{ env.PORT }}/actuator/health; then
-            echo "✓ Application accessible et en bonne santé"
-          else
-            echo "✗ L'application n'est pas accessible"
-            # Afficher plus d'info pour debug
-            kubectl describe pod -n ${{ env.NAMESPACE }} -l app=backend
-            exit 1
-          fi
-          
-          # Tuer le port-forward
-          kill $PF_PID
-          
-          # Méthode 2: Via NodePort
-          NODE_PORT=$(kubectl get svc -n ${{ env.NAMESPACE }} backend -o jsonpath='{.spec.ports[0].nodePort}')
-          echo "Service accessible sur NodePort: $NODE_PORT"
-
-      # Étape 8: Nettoyage (optionnel)
-      - name: Cleanup test
-        if: always()
-        run: |
-          echo "=== Nettoyage des ressources de test ==="
-          kubectl delete -n ${{ env.NAMESPACE }} deployment/cloud-pro service/backend --ignore-not-found=true
+          echo "Déploiement terminé"
+          kubectl get all -n appn ${{ env.NAMESPACE }} deployment/cloud-pro service/backend --ignore-not-found=true
